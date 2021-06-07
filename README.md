@@ -4,7 +4,7 @@ Simple Go program to remove URLs with duplicate funcionality based on script res
 Because of how the tool works, it will only return pages with a content type of text/html and a response code of 200. 
 
 ### Installation
-`go get github.com/michael1026/TrashCompactor`
+`go get github.com/michael1026/trashcompactor`
 
 ### Usage
 `cat URLs | trashcompactor`
