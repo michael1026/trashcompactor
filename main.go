@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -96,6 +97,6 @@ func printUniqueContentURLs(url string, client *http.Client, wg *sync.WaitGroup,
 		}
 
 		resources.AddResource(resource)
-		println(url)
+		fmt.Printf("%s\n", url)
 	}
 }
