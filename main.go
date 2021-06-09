@@ -39,7 +39,7 @@ func main() {
 		IdleConnTimeout: time.Second,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		DialContext: (&net.Dialer{
-			Timeout:   time.Second * 10,
+			Timeout:   time.Second * 3,
 			KeepAlive: time.Second,
 		}).DialContext,
 	}
@@ -51,13 +51,14 @@ func main() {
 	client := &http.Client{
 		Transport:     transport,
 		CheckRedirect: re,
-		Timeout:       time.Second * 10,
+		Timeout:       time.Second * 3,
 	}
 
 	wg := &sync.WaitGroup{}
 	s := bufio.NewScanner(os.Stdin)
 	for s.Scan() {
 		wg.Add(1)
+		time.Sleep(100 * time.Millisecond)
 		go printUniqueContentURLs(s.Text(), client, wg, &resources)
 	}
 
