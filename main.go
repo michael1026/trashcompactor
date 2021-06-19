@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha1"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -110,7 +109,6 @@ func printUniqueContentURLs(url string, client *http.Client, wg *sync.WaitGroup,
 	if resp.StatusCode == http.StatusOK && len(resp.Header.Get("content-type")) >= 9 && resp.Header.Get("content-type")[:9] == "text/html" {
 		doc, err := goquery.NewDocumentFromReader(resp.Body)
 		resource := ""
-		h := sha1.New()
 
 		if err != nil {
 			return
@@ -121,19 +119,11 @@ func printUniqueContentURLs(url string, client *http.Client, wg *sync.WaitGroup,
 			resource += src
 		})
 
-		doc.Find("script").Each(func(index int, item *goquery.Selection) {
-			content, _ := item.Html()
-			resource += fmt.Sprint(len(content))
-		})
-
-		h.Write([]byte(resource))
-		bs := h.Sum(nil)
-
-		if resources.Value(string(bs)) {
+		if resources.Value(resource) {
 			return
 		}
 
-		resources.AddResource(string(bs))
+		resources.AddResource(resource)
 		fmt.Println(url)
 	}
 }
