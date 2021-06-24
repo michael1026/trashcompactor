@@ -69,65 +69,77 @@ func buildHttpClient(jar cookiejar.Jar) (c *http.Client) {
 func main() {
 	resources := SafeResources{resources: make(map[string]bool)}
 	cookieFile := flag.String("C", "", "File containing cookie")
+	threads := flag.Int("t", 20, "Number of concurrent threads")
 
 	flag.Parse()
 
 	jar := sessionManager.ReadCookieJson(*cookieFile)
+	urls := make(chan string)
 
 	client := buildHttpClient(*jar)
 
 	wg := &sync.WaitGroup{}
 	s := bufio.NewScanner(os.Stdin)
-	for s.Scan() {
+
+	for i := 0; i < *threads; i++ {
 		wg.Add(1)
-		time.Sleep(100 * time.Millisecond)
-		go printUniqueContentURLs(s.Text(), client, wg, &resources)
+
+		go printUniqueContentURLs(urls, client, wg, &resources)
 	}
+
+	for s.Scan() {
+		urls <- s.Text()
+	}
+
+	close(urls)
 
 	wg.Wait()
 }
 
-func printUniqueContentURLs(rawUrl string, client *http.Client, wg *sync.WaitGroup, resources *SafeResources) {
+func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.WaitGroup, resources *SafeResources) {
 	defer wg.Done()
-	req, err := http.NewRequest("GET", rawUrl, nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Connection", "close")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return
-	}
+	for rawUrl := range urls {
+		req, err := http.NewRequest("GET", rawUrl, nil)
+		if err != nil {
+			return
+		}
+		req.Header.Set("Connection", "close")
 
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK && len(resp.Header.Get("content-type")) >= 9 && resp.Header.Get("content-type")[:9] == "text/html" {
-		doc, err := goquery.NewDocumentFromReader(resp.Body)
-		resource := ""
-
+		resp, err := client.Do(req)
 		if err != nil {
 			return
 		}
 
-		doc.Find("script[src]").Each(func(index int, item *goquery.Selection) {
-			src, _ := item.Attr("src")
-			srcurl, err := url.Parse(src)
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK && len(resp.Header.Get("content-type")) >= 9 && resp.Header.Get("content-type")[:9] == "text/html" {
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
+			resource := ""
 
 			if err != nil {
 				return
 			}
 
-			srcurl.RawQuery = ""
+			doc.Find("script[src]").Each(func(index int, item *goquery.Selection) {
+				src, _ := item.Attr("src")
+				srcurl, err := url.Parse(src)
 
-			resource += srcurl.String()
-		})
+				if err != nil {
+					return
+				}
 
-		if resources.Value(resource) {
-			return
+				srcurl.RawQuery = ""
+
+				resource += srcurl.String()
+			})
+
+			if resources.Value(resource) {
+				return
+			}
+
+			resources.AddResource(resource)
+			fmt.Println(rawUrl)
 		}
-
-		resources.AddResource(resource)
-		fmt.Println(rawUrl)
 	}
 }
