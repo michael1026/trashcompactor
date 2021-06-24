@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -69,7 +70,7 @@ func buildHttpClient(jar cookiejar.Jar) (c *http.Client) {
 func main() {
 	resources := SafeResources{resources: make(map[string]bool)}
 	cookieFile := flag.String("C", "", "File containing cookie")
-	threads := flag.Int("t", 20, "Number of concurrent threads")
+	threads := flag.Int("t", 1, "Number of concurrent threads")
 
 	flag.Parse()
 
@@ -77,23 +78,29 @@ func main() {
 	urls := make(chan string)
 
 	client := buildHttpClient(*jar)
+	file, err := os.Open("../../temp")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
 
-	wg := &sync.WaitGroup{}
-	s := bufio.NewScanner(os.Stdin)
+	wg := sync.WaitGroup{}
+	s := bufio.NewScanner(file)
 
 	for i := 0; i < *threads; i++ {
 		wg.Add(1)
 
-		go printUniqueContentURLs(urls, client, wg, &resources)
+		go printUniqueContentURLs(urls, client, &wg, &resources)
 	}
 
 	for s.Scan() {
 		urls <- s.Text()
 	}
 
-	close(urls)
-
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(urls)
+	}()
 }
 
 func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.WaitGroup, resources *SafeResources) {
@@ -102,13 +109,13 @@ func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.Wait
 	for rawUrl := range urls {
 		req, err := http.NewRequest("GET", rawUrl, nil)
 		if err != nil {
-			return
+			continue
 		}
 		req.Header.Set("Connection", "close")
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return
+			continue
 		}
 
 		defer resp.Body.Close()
@@ -118,7 +125,7 @@ func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.Wait
 			resource := ""
 
 			if err != nil {
-				return
+				continue
 			}
 
 			doc.Find("script[src]").Each(func(index int, item *goquery.Selection) {
@@ -135,7 +142,7 @@ func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.Wait
 			})
 
 			if resources.Value(resource) {
-				return
+				continue
 			}
 
 			resources.AddResource(resource)
