@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"crypto/tls"
 	"flag"
-	"fmt"
-	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -28,6 +26,15 @@ type SafeResources struct {
 func (c *SafeResources) AddResource(key string) {
 	c.mu.Lock()
 	c.resources[key] = true
+	c.mu.Unlock()
+}
+
+func (c *SafeResources) AddAndPrintIfUnique(key string, url string) {
+	c.mu.Lock()
+	if !c.resources[key] {
+		println(url)
+		c.resources[key] = true
+	}
 	c.mu.Unlock()
 }
 
@@ -78,14 +85,9 @@ func main() {
 	urls := make(chan string)
 
 	client := buildHttpClient(*jar)
-	file, err := os.Open("../../temp")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
 
 	wg := sync.WaitGroup{}
-	s := bufio.NewScanner(file)
+	s := bufio.NewScanner(os.Stdin)
 
 	for i := 0; i < *threads; i++ {
 		wg.Add(1)
@@ -97,10 +99,8 @@ func main() {
 		urls <- s.Text()
 	}
 
-	go func() {
-		wg.Wait()
-		close(urls)
-	}()
+	close(urls)
+	wg.Wait()
 }
 
 func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.WaitGroup, resources *SafeResources) {
@@ -141,12 +141,7 @@ func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.Wait
 				resource += srcurl.String()
 			})
 
-			if resources.Value(resource) {
-				continue
-			}
-
-			resources.AddResource(resource)
-			fmt.Println(rawUrl)
+			resources.AddAndPrintIfUnique(resource, rawUrl)
 		}
 	}
 }
