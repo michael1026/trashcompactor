@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -32,7 +33,7 @@ func (c *SafeResources) AddResource(key string) {
 func (c *SafeResources) AddAndPrintIfUnique(key string, url string) {
 	c.mu.Lock()
 	if !c.resources[key] {
-		println(url)
+		fmt.Println(url)
 		c.resources[key] = true
 	}
 	c.mu.Unlock()
