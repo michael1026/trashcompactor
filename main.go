@@ -19,11 +19,29 @@ import (
 	"github.com/michael1026/sessionManager"
 )
 
+var (
+	resources   SafeResources
+	jsonResults map[string]string
+	client      *http.Client
+	threads     int
+)
+
 type CookieInfo map[string]string
 
 type SafeResources struct {
 	mu        sync.Mutex
 	resources map[string]bool
+}
+
+type Response struct {
+	*http.Response
+	url string
+	err error
+}
+
+type Request struct {
+	*http.Request
+	url string
 }
 
 func (c *SafeResources) AddResource(key string) {
@@ -32,12 +50,12 @@ func (c *SafeResources) AddResource(key string) {
 	c.mu.Unlock()
 }
 
-func (c *SafeResources) AddAndPrintIfUnique(key string, url string, contentType string, jsonResult map[string]string) {
+func (c *SafeResources) AddAndPrintIfUnique(key string, url string, contentType string) {
 	c.mu.Lock()
 	if !c.resources[key] {
 		fmt.Println(url)
 		c.resources[key] = true
-		jsonResult[url] = contentType
+		jsonResults[url] = contentType
 	}
 	c.mu.Unlock()
 }
@@ -67,7 +85,7 @@ func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
 	client := &http.Client{
 		Transport:     transport,
 		CheckRedirect: re,
-		Timeout:       time.Second * 3,
+		Timeout:       time.Second * 8,
 		Jar:           jar,
 	}
 
@@ -75,37 +93,37 @@ func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
 }
 
 func main() {
-	resources := SafeResources{resources: make(map[string]bool)}
+	resources = SafeResources{resources: make(map[string]bool)}
 	cookieFile := flag.String("C", "", "File containing cookie")
-	threads := flag.Int("t", 5, "Number of concurrent threads")
+	flag.IntVar(&threads, "t", 5, "Number of concurrent threads")
 	outputJson := flag.String("json", "", "Output as json")
-	jsonResult := make(map[string]string)
+	jsonResults = make(map[string]string)
 
 	flag.Parse()
 
 	jar := sessionManager.ReadCookieJson(*cookieFile)
-	urls := make(chan string)
+	urls := []string{}
 
-	client := buildHttpClient(jar)
+	client = buildHttpClient(jar)
 
 	wg := sync.WaitGroup{}
 	s := bufio.NewScanner(os.Stdin)
 
-	for i := 0; i < *threads; i++ {
-		wg.Add(1)
-
-		go printUniqueContentURLs(urls, client, &wg, &resources, jsonResult)
-	}
-
 	for s.Scan() {
-		urls <- s.Text()
+		urls = append(urls, s.Text())
 	}
 
-	close(urls)
+	reqChan := make(chan Request)
+	respChan := make(chan Response)
+
+	go dispatcher(urls, reqChan)
+	go workerPool(reqChan, respChan)
+	consumer(urls, respChan)
+
 	wg.Wait()
 
 	if *outputJson != "" {
-		jsonFile, err := json.Marshal(jsonResult)
+		jsonFile, err := json.Marshal(jsonResults)
 
 		if err != nil {
 			fmt.Printf("Error marshalling JSON: %s\n", err)
@@ -120,64 +138,47 @@ func main() {
 	}
 }
 
-func printUniqueContentURLs(urls chan string, client *http.Client, wg *sync.WaitGroup, resources *SafeResources, jsonResult map[string]string) {
-	defer wg.Done()
+func printUniqueContentURLs(resp http.Response, rawUrl string) {
+	if resp.StatusCode == http.StatusOK {
+		resource := ""
+		if len(resp.Header.Get("content-type")) >= 9 && resp.Header.Get("content-type")[:9] == "text/html" {
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
 
-	for rawUrl := range urls {
-		req, err := http.NewRequest("GET", rawUrl, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Connection", "close")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
-		}
-
-		defer resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			resource := ""
-			if len(resp.Header.Get("content-type")) >= 9 && resp.Header.Get("content-type")[:9] == "text/html" {
-				doc, err := goquery.NewDocumentFromReader(resp.Body)
-
-				if err != nil {
-					continue
-				}
-
-				doc.Find("script[src]").Each(func(index int, item *goquery.Selection) {
-					src, _ := item.Attr("src")
-					srcurl, err := url.Parse(src)
-
-					if err != nil {
-						return
-					}
-
-					srcurl.RawQuery = ""
-
-					resource += srcurl.String()
-				})
-
-				resources.AddAndPrintIfUnique(resource, rawUrl, "text/html", jsonResult)
-			} else if len(resp.Header.Get("content-type")) >= 16 && resp.Header.Get("content-type")[:16] == "application/json" {
-				var resultMap map[string]interface{}
-				body, err := ioutil.ReadAll(resp.Body)
-
-				if err != nil {
-					continue
-				}
-
-				err = json.Unmarshal([]byte(body), &resultMap)
-
-				if err != nil {
-					continue
-				}
-
-				resource = mapKeysToString(resultMap)
-
-				resources.AddAndPrintIfUnique(resource, rawUrl, "application/json", jsonResult)
+			if err != nil {
+				return
 			}
+
+			doc.Find("script[src]").Each(func(index int, item *goquery.Selection) {
+				src, _ := item.Attr("src")
+				srcurl, err := url.Parse(src)
+
+				if err != nil {
+					return
+				}
+
+				srcurl.RawQuery = ""
+
+				resource += srcurl.String()
+			})
+
+			resources.AddAndPrintIfUnique(resource, rawUrl, "text/html")
+		} else if len(resp.Header.Get("content-type")) >= 16 && resp.Header.Get("content-type")[:16] == "application/json" {
+			var resultMap map[string]interface{}
+			body, err := ioutil.ReadAll(resp.Body)
+
+			if err != nil {
+				return
+			}
+
+			err = json.Unmarshal([]byte(body), &resultMap)
+
+			if err != nil {
+				return
+			}
+
+			resource = mapKeysToString(resultMap)
+
+			resources.AddAndPrintIfUnique(resource, rawUrl, "application/json")
 		}
 	}
 }
@@ -190,6 +191,46 @@ func mapKeysToString(jsonMap map[string]interface{}) string {
 	return finalString
 }
 
-func writeOutputToJson(result *SafeResources) {
+func dispatcher(urls []string, reqChan chan Request) {
+	defer close(reqChan)
+	for _, url := range urls {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			fmt.Println(err)
+		}
+		reqChan <- Request{req, url}
+	}
+}
 
+func workerPool(reqChan chan Request, respChan chan Response) {
+	for i := 0; i < threads; i++ {
+		go worker(reqChan, respChan)
+	}
+}
+
+func worker(reqChan chan Request, respChan chan Response) {
+	for req := range reqChan {
+		resp, err := client.Do(req.Request)
+		r := Response{resp, req.url, err}
+		respChan <- r
+	}
+}
+
+func consumer(urls []string, respChan chan Response) {
+	var (
+		conns int64
+	)
+
+	for conns < int64(len(urls)) {
+		select {
+		case r, ok := <-respChan:
+			if ok {
+				if r.err == nil {
+					printUniqueContentURLs(*r.Response, r.url)
+					r.Body.Close()
+				}
+				conns++
+			}
+		}
+	}
 }
