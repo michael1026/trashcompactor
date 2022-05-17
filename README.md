@@ -11,3 +11,14 @@ Because of how the tool works, it will only return pages with a content type of 
 ### Usage
 `cat URLs | trashcompactor`
 
+### Authenticated Scanning
+This tool supports scanning using cookies for multiple websites. To use this feature, create a JSON file containing URLs and their associated cookies, like the following...
+
+```
+{
+    "https://www.example.com/":"session=15as51c8se1et",
+    "https://www.example.org/":"jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+}
+```
+
+Then use the `-C` argument to provide this file. 
