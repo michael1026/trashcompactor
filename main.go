@@ -197,6 +197,7 @@ func dispatcher(urls []string, reqChan chan Request) {
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			fmt.Println(err)
+			continue
 		}
 		req.Close = true
 		req.Header.Add("Connection", "close")
