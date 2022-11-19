@@ -12,7 +12,6 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -22,17 +21,12 @@ import (
 
 var (
 	urlMap      cmap.ConcurrentMap[string, bool]
-	jsonResults map[string]string
+	jsonResults cmap.ConcurrentMap[string, string]
 	client      *http.Client
 	threads     int
 )
 
 type CookieInfo map[string]string
-
-type SafeResources struct {
-	mu        sync.Mutex
-	resources map[string]bool
-}
 
 type Response struct {
 	*http.Response
@@ -45,17 +39,11 @@ type Request struct {
 	url string
 }
 
-func (c *SafeResources) AddResource(key string) {
-	c.mu.Lock()
-	c.resources[key] = true
-	c.mu.Unlock()
-}
-
 func AddAndPrintIfUnique(urlMap cmap.ConcurrentMap[string, bool], key string, url string, contentType string) {
 	if _, ok := urlMap.Get(key); !ok {
 		fmt.Println(url)
 		urlMap.Set(key, true)
-		jsonResults[url] = contentType
+		jsonResults.Set(url, contentType)
 	}
 }
 
@@ -90,7 +78,7 @@ func main() {
 	cookieFile := flag.String("C", "", "File containing cookie")
 	flag.IntVar(&threads, "t", 5, "Number of concurrent threads")
 	outputJson := flag.String("json", "", "Output as json")
-	jsonResults = make(map[string]string)
+	jsonResults = cmap.New[string]()
 
 	flag.Parse()
 
@@ -99,7 +87,6 @@ func main() {
 
 	client = buildHttpClient(jar)
 
-	wg := sync.WaitGroup{}
 	s := bufio.NewScanner(os.Stdin)
 
 	for s.Scan() {
@@ -108,12 +95,12 @@ func main() {
 
 	reqChan := make(chan Request)
 	respChan := make(chan Response)
+	done := make(chan bool)
 
 	go dispatcher(urls, reqChan)
 	go workerPool(reqChan, respChan)
-	consumer(urls, respChan)
-
-	wg.Wait()
+	go consumer(urls, respChan, done)
+	<-done
 
 	if *outputJson != "" {
 		jsonFile, err := json.Marshal(jsonResults)
@@ -189,7 +176,6 @@ func dispatcher(urls []string, reqChan chan Request) {
 	for _, url := range urls {
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
-			fmt.Println(err)
 			continue
 		}
 		req.Close = true
@@ -214,23 +200,14 @@ func worker(reqChan chan Request, respChan chan Response) {
 		r := Response{resp, req.url, err}
 		respChan <- r
 	}
+	close(respChan)
 }
 
-func consumer(urls []string, respChan chan Response) {
-	var (
-		conns int64
-	)
-
-	for conns < int64(len(urls)) {
-		select {
-		case r, ok := <-respChan:
-			if ok {
-				if r.err == nil {
-					printUniqueContentURLs(*r.Response, r.url)
-					r.Body.Close()
-				}
-				conns++
-			}
+func consumer(urls []string, respChan chan Response, done chan bool) {
+	for resp := range respChan {
+		if resp.Response != nil {
+			printUniqueContentURLs(*resp.Response, resp.url)
 		}
 	}
+	done <- true
 }
