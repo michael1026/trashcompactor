@@ -17,7 +17,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/michael1026/sessionManager"
-	cmap "github.com/orcaman/concurrent-map"
+	cmap "github.com/orcaman/concurrent-map/v2"
 )
 
 var (
