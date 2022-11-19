@@ -17,10 +17,11 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/michael1026/sessionManager"
+	cmap "github.com/orcaman/concurrent-map"
 )
 
 var (
-	resources   SafeResources
+	urlMap      cmap.ConcurrentMap[string, bool]
 	jsonResults map[string]string
 	client      *http.Client
 	threads     int
@@ -50,20 +51,12 @@ func (c *SafeResources) AddResource(key string) {
 	c.mu.Unlock()
 }
 
-func (c *SafeResources) AddAndPrintIfUnique(key string, url string, contentType string) {
-	c.mu.Lock()
-	if !c.resources[key] {
+func AddAndPrintIfUnique(urlMap cmap.ConcurrentMap[string, bool], key string, url string, contentType string) {
+	if _, ok := urlMap.Get(key); !ok {
 		fmt.Println(url)
-		c.resources[key] = true
+		urlMap.Set(key, true)
 		jsonResults[url] = contentType
 	}
-	c.mu.Unlock()
-}
-
-func (c *SafeResources) Value(key string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.resources[key]
 }
 
 func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
@@ -93,7 +86,7 @@ func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
 }
 
 func main() {
-	resources = SafeResources{resources: make(map[string]bool)}
+	urlMap = cmap.New[bool]()
 	cookieFile := flag.String("C", "", "File containing cookie")
 	flag.IntVar(&threads, "t", 5, "Number of concurrent threads")
 	outputJson := flag.String("json", "", "Output as json")
@@ -161,7 +154,7 @@ func printUniqueContentURLs(resp http.Response, rawUrl string) {
 				resource += srcurl.String()
 			})
 
-			resources.AddAndPrintIfUnique(resource, rawUrl, "text/html")
+			AddAndPrintIfUnique(urlMap, resource, rawUrl, "text/html")
 		} else if len(resp.Header.Get("content-type")) >= 16 && resp.Header.Get("content-type")[:16] == "application/json" {
 			var resultMap map[string]interface{}
 			body, err := ioutil.ReadAll(resp.Body)
@@ -178,7 +171,7 @@ func printUniqueContentURLs(resp http.Response, rawUrl string) {
 
 			resource = mapKeysToString(resultMap)
 
-			resources.AddAndPrintIfUnique(resource, rawUrl, "application/json")
+			AddAndPrintIfUnique(urlMap, resource, rawUrl, "application/json")
 		}
 	}
 }
