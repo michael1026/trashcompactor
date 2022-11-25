@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"net"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -17,6 +17,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/michael1026/sessionManager"
 	cmap "github.com/orcaman/concurrent-map/v2"
+	"github.com/projectdiscovery/fastdialer/fastdialer"
 )
 
 var (
@@ -48,15 +49,25 @@ func AddAndPrintIfUnique(urlMap cmap.ConcurrentMap[string, bool], key string, ur
 }
 
 func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
+	fastdialerOpts := fastdialer.DefaultOptions
+	fastdialerOpts.EnableFallback = true
+	dialer, err := fastdialer.NewDialer(fastdialerOpts)
+	if err != nil {
+		log.Fatal("Error building HTTP client")
+		return nil
+	}
+
 	transport := &http.Transport{
-		MaxIdleConns:      30,
-		IdleConnTimeout:   3 * time.Second,
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
-		DisableKeepAlives: true,
-		DialContext: (&net.Dialer{
-			Timeout:   3 * time.Second,
-			KeepAlive: time.Second,
-		}).DialContext,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		MaxConnsPerHost:     100,
+		IdleConnTimeout:     time.Second * 10,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			Renegotiation:      tls.RenegotiateOnceAsClient,
+		},
+		DisableKeepAlives: false,
+		DialContext:       dialer.Dial,
 	}
 
 	re := func(req *http.Request, via []*http.Request) error {
@@ -66,7 +77,7 @@ func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
 	client := &http.Client{
 		Transport:     transport,
 		CheckRedirect: re,
-		Timeout:       time.Second * 8,
+		Timeout:       time.Second * 5,
 		Jar:           jar,
 	}
 
@@ -74,6 +85,7 @@ func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
 }
 
 func main() {
+	start := time.Now()
 	urlMap = cmap.New[bool]()
 	cookieFile := flag.String("C", "", "File containing cookie")
 	flag.IntVar(&threads, "t", 5, "Number of concurrent threads")
@@ -94,12 +106,12 @@ func main() {
 	}
 
 	reqChan := make(chan Request)
-	respChan := make(chan Response)
 	done := make(chan bool)
 
-	go dispatcher(urls, reqChan)
-	go workerPool(reqChan, respChan)
-	go consumer(urls, respChan, done)
+	go producer(urls, reqChan)
+	for i := 0; i < threads; i++ {
+		go consumer(reqChan, done)
+	}
 	<-done
 
 	if *outputJson != "" {
@@ -116,6 +128,7 @@ func main() {
 			fmt.Printf("Error writing JSON to file: %s\n", err)
 		}
 	}
+	fmt.Println(time.Since(start))
 }
 
 func printUniqueContentURLs(resp http.Response, rawUrl string) {
@@ -171,7 +184,7 @@ func mapKeysToString(jsonMap map[string]interface{}) string {
 	return finalString
 }
 
-func dispatcher(urls []string, reqChan chan Request) {
+func producer(urls []string, reqChan chan Request) {
 	defer close(reqChan)
 	for _, url := range urls {
 		req, err := http.NewRequest("GET", url, nil)
@@ -186,27 +199,15 @@ func dispatcher(urls []string, reqChan chan Request) {
 
 		reqChan <- Request{req, url}
 	}
+
 }
 
-func workerPool(reqChan chan Request, respChan chan Response) {
-	for i := 0; i < threads; i++ {
-		go worker(reqChan, respChan)
-	}
-}
-
-func worker(reqChan chan Request, respChan chan Response) {
+func consumer(reqChan chan Request, done chan bool) {
 	for req := range reqChan {
 		resp, err := client.Do(req.Request)
 		r := Response{resp, req.url, err}
-		respChan <- r
-	}
-	close(respChan)
-}
-
-func consumer(urls []string, respChan chan Response, done chan bool) {
-	for resp := range respChan {
-		if resp.Response != nil {
-			printUniqueContentURLs(*resp.Response, resp.url)
+		if r.Response != nil {
+			printUniqueContentURLs(*r.Response, r.url)
 		}
 	}
 	done <- true
