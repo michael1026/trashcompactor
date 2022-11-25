@@ -85,7 +85,6 @@ func buildHttpClient(jar *cookiejar.Jar) (c *http.Client) {
 }
 
 func main() {
-	start := time.Now()
 	urlMap = cmap.New[bool]()
 	cookieFile := flag.String("C", "", "File containing cookie")
 	flag.IntVar(&threads, "t", 5, "Number of concurrent threads")
@@ -128,7 +127,6 @@ func main() {
 			fmt.Printf("Error writing JSON to file: %s\n", err)
 		}
 	}
-	fmt.Println(time.Since(start))
 }
 
 func printUniqueContentURLs(resp http.Response, rawUrl string) {
