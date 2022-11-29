@@ -202,10 +202,12 @@ func producer(urls []string, reqChan chan Request) {
 
 func consumer(reqChan chan Request, done chan bool) {
 	for req := range reqChan {
-		resp, err := client.Do(req.Request)
-		r := Response{resp, req.url, err}
-		if r.Response != nil {
-			printUniqueContentURLs(*r.Response, r.url)
+		if req.Request != nil {
+			resp, err := client.Do(req.Request)
+			r := Response{resp, req.url, err}
+			if r.Response != nil {
+				printUniqueContentURLs(*r.Response, r.url)
+			}
 		}
 	}
 	done <- true
